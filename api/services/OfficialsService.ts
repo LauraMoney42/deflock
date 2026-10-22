@@ -1,5 +1,7 @@
 import { createCache, Cache } from 'cache-manager';
 import { Type, Static } from '@sinclair/typebox';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { otelLogger, SeverityNumber } from '../telemetry';
 const { DiskStore } = require('cache-manager-fs-hash');
 
@@ -27,7 +29,13 @@ const LegislatorSchema = Type.Object({
   chamber: Type.Union([Type.Literal('upper'), Type.Literal('lower'), Type.Literal('legislature')]),
   district: Type.String(),
   email: Type.Union([Type.String(), Type.Null()]),
+  phone: Type.Union([Type.String(), Type.Null()]),
   url: Type.Union([Type.String(), Type.Null()]),
+});
+
+const UnfilledSeatSchema = Type.Object({
+  chamber: Type.Union([Type.Literal('upper'), Type.Literal('lower')]),
+  district: Type.String(),
 });
 
 export const OfficialsResultSchema = Type.Object({
@@ -35,10 +43,14 @@ export const OfficialsResultSchema = Type.Object({
   place: Type.Union([LocalGovSchema, Type.Null()]),
   county: Type.Union([LocalGovSchema, Type.Null()]),
   stateLegislators: Type.Array(LegislatorSchema),
+  // Districts that contain the camera but have no current member in our data,
+  // usually a vacancy. Shown to the user instead of silently leaving a gap.
+  unfilledSeats: Type.Array(UnfilledSeatSchema),
 });
 
 export type LocalGov = Static<typeof LocalGovSchema>;
 export type Legislator = Static<typeof LegislatorSchema>;
+export type UnfilledSeat = Static<typeof UnfilledSeatSchema>;
 export type OfficialsResult = Static<typeof OfficialsResultSchema>;
 
 interface CensusGeo {
@@ -81,6 +93,17 @@ export function normalizeDistrict(district: string): string {
   return /^\d+$/.test(trimmed) ? String(parseInt(trimmed, 10)) : trimmed.toLowerCase();
 }
 
+// Consolidated city-counties come back as e.g. "Indianapolis city (balance)"
+// or "Nashville-Davidson metropolitan government (balance)". Names without
+// "(balance)" are left alone, since some cities really are named "Boise City".
+export function cleanPlaceName(name: string): string {
+  if (!/\(balance\)/.test(name)) return name;
+  return name
+    .replace(/\s*\(balance\)\s*$/, '')
+    .replace(/\s+(city|town|metropolitan government|unified government|consolidated government)$/i, '')
+    .trim();
+}
+
 export function parseCensusResponse(json: any): CensusLookup | null {
   const geographies: Record<string, CensusGeo[]> | undefined = json?.result?.geographies;
   if (!geographies) return null;
@@ -96,7 +119,7 @@ export function parseCensusResponse(json: any): CensusLookup | null {
   return {
     state: { code: state.STUSAB, name: state.NAME, fips: state.GEOID },
     county: county ? { name: county.NAME, fips: county.GEOID } : null,
-    place: place ? { name: place.BASENAME, fips: place.GEOID } : null,
+    place: place ? { name: cleanPlaceName(place.BASENAME), fips: place.GEOID } : null,
     upperDistrict: upper?.BASENAME ?? null,
     lowerDistrict: lower?.BASENAME ?? null,
   };
@@ -149,26 +172,87 @@ export function toLegislator(row: Record<string, string>): Legislator {
     chamber,
     district: row.current_district,
     email: row.email || null,
+    // Capitol office first: it's staffed during session, district offices often aren't
+    phone: row.capitol_voice || row.district_voice || null,
     // "links" is semicolon-separated; the first is the official legislature page
     url: row.links?.split(';')[0] || null,
   };
 }
 
-export function matchLegislators(all: Legislator[], lookup: CensusLookup): Legislator[] {
-  const upper = lookup.upperDistrict ? normalizeDistrict(lookup.upperDistrict) : null;
-  const lower = lookup.lowerDistrict ? normalizeDistrict(lookup.lowerDistrict) : null;
-  return all.filter(l => {
-    const d = normalizeDistrict(l.district);
-    // Nebraska's unicameral legislature is reported by Census as "Upper"
-    if (l.chamber === 'upper' || l.chamber === 'legislature') return d === upper;
-    return d === lower;
-  });
+// Idaho elects two House members per district as seats "19A" and "19B",
+// while Census calls the district "19". When Census gives a bare number,
+// lettered seats with that number share the whole district. Minnesota's
+// letters are separate districts, but Census includes the letter there
+// ("64A"), so the exact match wins and this fallback never applies.
+function seatNumber(district: string): string | null {
+  const m = district.trim().match(/^(\d+)[A-Za-z]$/);
+  return m ? String(parseInt(m[1], 10)) : null;
+}
+
+function matchChamber(all: Legislator[], chambers: Legislator['chamber'][], district: string | null): Legislator[] {
+  if (!district) return [];
+  const target = normalizeDistrict(district);
+  const inChamber = all.filter(l => chambers.includes(l.chamber));
+  const exact = inChamber.filter(l => normalizeDistrict(l.district) === target);
+  if (exact.length || !/^\d+$/.test(target)) return exact;
+  return inChamber.filter(l => seatNumber(l.district) === target);
+}
+
+export function matchLegislators(all: Legislator[], lookup: CensusLookup): { legislators: Legislator[]; unfilledSeats: UnfilledSeat[] } {
+  // Nebraska's unicameral legislature is reported by Census as "Upper"
+  const upper = matchChamber(all, ['upper', 'legislature'], lookup.upperDistrict);
+  const lower = matchChamber(all, ['lower'], lookup.lowerDistrict);
+  const unfilledSeats: UnfilledSeat[] = [];
+  if (lookup.upperDistrict && !upper.length) unfilledSeats.push({ chamber: 'upper', district: normalizeDistrict(lookup.upperDistrict) });
+  if (lookup.lowerDistrict && !lower.length) unfilledSeats.push({ chamber: 'lower', district: normalizeDistrict(lookup.lowerDistrict) });
+  return { legislators: [...upper, ...lower], unfilledSeats };
+}
+
+// Hand-checked corrections and additions, kept as a spreadsheet so anyone can
+// review or edit them (data/state-legislator-overrides.csv). A row fills in
+// blank fields of the matching Open States legislator (same state, chamber,
+// district, and name), or adds the person if Open States doesn't have them.
+// Open States values are never overwritten by a blank cell.
+export function applyOverrides(all: Legislator[], stateCode: string, overrides: Record<string, string>[]): Legislator[] {
+  const result = all.map(l => ({ ...l }));
+  for (const o of overrides) {
+    if (o.state?.toUpperCase() !== stateCode.toUpperCase() || !o.name) continue;
+    const chamber = (['upper', 'lower', 'legislature'].includes(o.chamber) ? o.chamber : 'lower') as Legislator['chamber'];
+    const existing = result.find(l =>
+      l.chamber === chamber &&
+      normalizeDistrict(l.district) === normalizeDistrict(o.district) &&
+      l.name.toLowerCase() === o.name.toLowerCase());
+    if (existing) {
+      existing.email = existing.email || o.email || null;
+      existing.phone = existing.phone || o.phone || null;
+      existing.url = existing.url || o.url || null;
+    } else {
+      result.push(toLegislator({
+        name: o.name, given_name: '', family_name: '', current_party: o.party ?? '',
+        current_chamber: chamber, current_district: o.district, email: o.email ?? '',
+        capitol_voice: o.phone ?? '', links: o.url ?? '',
+      }));
+    }
+  }
+  return result;
+}
+
+let overridesCache: Record<string, string>[] | null = null;
+function loadOverrides(): Record<string, string>[] {
+  if (!overridesCache) {
+    try {
+      overridesCache = parseCsv(readFileSync(join(import.meta.dir, '../data/state-legislator-overrides.csv'), 'utf8'));
+    } catch {
+      overridesCache = [];
+    }
+  }
+  return overridesCache;
 }
 
 export class OfficialsService {
   async lookup(lat: number, lon: number): Promise<OfficialsResult | null> {
     // ~110m grid: every request for the same camera hits the same key
-    const cacheKey = `officials:${lat.toFixed(3)},${lon.toFixed(3)}`;
+    const cacheKey = `officials:v6:${lat.toFixed(3)},${lon.toFixed(3)}`;
     const cached = await cache.get<OfficialsResult>(cacheKey);
     if (cached) return cached;
 
@@ -177,10 +261,13 @@ export class OfficialsService {
 
     // Legislators and websites are nice-to-have: a failure there still returns
     // the city/county/state names so the user can find contacts themselves.
-    const [legislators, websites] = await Promise.all([
+    const [openStates, websites] = await Promise.all([
       this.stateLegislators(census.state.code).catch(err => { this.logSoftError('openstates', err); return []; }),
       this.localWebsites(census).catch(err => { this.logSoftError('wikidata', err); return {} as LocalInfo; }),
     ]);
+
+    const legislators = applyOverrides(openStates, census.state.code, loadOverrides());
+    const { legislators: matched, unfilledSeats } = matchLegislators(legislators, census);
 
     const result: OfficialsResult = {
       state: census.state,
@@ -194,7 +281,8 @@ export class OfficialsService {
         website: websites.county?.website ?? null,
         head: websites.county?.head ?? null,
       } : null,
-      stateLegislators: matchLegislators(legislators, census),
+      stateLegislators: matched,
+      unfilledSeats,
     };
 
     await cache.set(cacheKey, result);
@@ -218,7 +306,7 @@ export class OfficialsService {
 
   async stateLegislators(stateCode: string): Promise<Legislator[]> {
     const code = stateCode.toLowerCase();
-    const cacheKey = `openstates:${code}`;
+    const cacheKey = `openstates:v2:${code}`;
     const cached = await cache.get<Legislator[]>(cacheKey);
     if (cached) return cached;
 
@@ -239,12 +327,18 @@ export class OfficialsService {
     // they go into the query text.
     const safe = (s: string) => s.replace(/[^0-9-]/g, '');
 
-    const query = `SELECT ?kind ?site ?headLabel WHERE {
+    // Mayors appear two ways on Wikidata: a "head of government" (P6) on the
+    // city itself, or an office like "Mayor of Springdale" (P1313) whose
+    // officeholder (P1308) is listed there. Only best-ranked statements count
+    // (editors mark the current one "preferred"), and any with an end date
+    // (P582) are former officials and are skipped.
+    const query = `SELECT ?kind ?site ?headLabel ?holderLabel WHERE {
       { ?item wdt:P882 "${safe(countyFips)}" . BIND("county" AS ?kind) }
       UNION
       { ?item wdt:P774 "${safe(placeFips)}" . BIND("place" AS ?kind) }
       OPTIONAL { ?item wdt:P856 ?site }
-      OPTIONAL { ?item wdt:P6 ?head }
+      OPTIONAL { ?item p:P6 ?hs . ?hs a wikibase:BestRank ; ps:P6 ?head . FILTER NOT EXISTS { ?hs pq:P582 ?hEnd } }
+      OPTIONAL { ?item wdt:P1313 ?office . ?office p:P1308 ?os . ?os a wikibase:BestRank ; ps:P1308 ?holder . FILTER NOT EXISTS { ?os pq:P582 ?oEnd } }
       SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
     }`;
 
@@ -255,14 +349,31 @@ export class OfficialsService {
       throw new Error(`Wikidata error: ${response.status}`);
     }
     const json = await response.json() as any;
-    const info: LocalInfo = {};
+    // A label that is just the Q-id means the item has no English name
+    const label = (v?: string) => (v && !/^Q\d+$/.test(v) ? v : null);
+    const seen: Record<string, { sites: string[]; heads: Set<string>; holders: Set<string> }> = {};
     for (const b of json?.results?.bindings ?? []) {
       const kind = b.kind?.value as 'county' | 'place' | undefined;
-      if (!kind || info[kind]) continue;
+      if (!kind) continue;
+      const k = (seen[kind] ??= { sites: [], heads: new Set(), holders: new Set() });
+      if (b.site?.value && !k.sites.includes(b.site.value)) k.sites.push(b.site.value);
+      const head = label(b.headLabel?.value);
+      const holder = label(b.holderLabel?.value);
+      if (head) k.heads.add(head);
+      if (holder) k.holders.add(holder);
+    }
+
+    // Prefer the place's own head of government. Officeholder lists often
+    // have past mayors with no end date, so they're only used as a fallback,
+    // and only when exactly one person is listed: a blank beats a wrong name.
+    const only = (names: Set<string>) => (names.size === 1 ? [...names][0] : null);
+    const info: LocalInfo = {};
+    for (const kind of ['county', 'place'] as const) {
+      const k = seen[kind];
+      if (!k) continue;
       info[kind] = {
-        website: b.site?.value ?? null,
-        // A label that is just the Q-id means the item has no English name
-        head: b.headLabel?.value && !/^Q\d+$/.test(b.headLabel.value) ? b.headLabel.value : null,
+        website: k.sites[0] ?? null,
+        head: k.heads.size ? only(k.heads) : only(k.holders),
       };
     }
     return info;
