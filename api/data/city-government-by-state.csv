@@ -1,0 +1,50 @@
+state,place_type,body_name,head_title,varies,note
+default,borough,,,yes,No single name is common enough to use nationwide
+default,city,City Council,Mayor,no,The common case. States where cities commonly differ have their own varies=yes row. Medium confidence for states without a row: AL AK AZ CA CO IL IA ID MN NC NE NV OH OR PA RI SC TX UT VA WA WY
+default,municipality,,,yes,No single name is common enough to use nationwide
+default,town,,,yes,No single name is common enough to use nationwide
+default,township,,,yes,No single name is common enough to use nationwide
+default,village,,,yes,No single name is common enough to use nationwide
+AK,city and borough,Assembly,Mayor,no,"Juneau, Sitka, and Wrangell are unified city-borough governments run by an Assembly"
+AK,municipality,Assembly,Mayor,no,Anchorage is a unified municipality run by the Anchorage Assembly
+AR,city,,Mayor,yes,Little Rock and Fort Smith have a Board of Directors; Springdale and Fayetteville have a City Council
+AZ,town,Town Council,Mayor,no,Medium to high confidence
+CA,town,Town Council,Mayor,no,Medium to high confidence
+CT,city,,,yes,"Court of Common Council, City Council, Board of Aldermen, and Board of Alders are all used"
+DC,city,,,yes,"Washington is governed by the Council of the District of Columbia, not a city council"
+DE,city,,,yes,"Mix of City Council, Town Council, and Board of Commissioners"
+FL,city,,,yes,Mix of City Commission and City Council
+GA,city,,,yes,Mix of City Council and Board of Commissioners; some consolidated governments
+IN,city,,,yes,Mix of Common Council and City Council
+KS,city,,,yes,Mix of City Commission and City Council
+KY,city,,,yes,"Mix of City Council, City Commission, and Board of Commissioners; Louisville and Lexington are metro governments"
+LA,city,,,yes,"Mix of City Council, Board of Aldermen, and parish-consolidated governments"
+MA,city,,Mayor,yes,Mix of City Council and Board of Aldermen
+MD,city,,,yes,"Mix of Mayor and City Council, Board of Aldermen, and Commissioners"
+ME,city,,,yes,City Council or Board of Aldermen; some cities have council-appointed managers and a council chair instead of a Mayor
+MI,city,,,yes,Mix of City Council and City Commission
+MO,city,,Mayor,yes,Many cities have a Board of Aldermen; others a City Council
+MS,city,,,yes,Mix of City Council and Board of Aldermen
+MT,city,,,yes,Mix of City Council and City Commission
+ND,city,,,yes,Mix of City Commission and City Council
+NH,city,,,yes,Mix of City Council and Board of Mayor and Aldermen
+NJ,borough,Borough Council,Mayor,no,High confidence: Borough form of NJ government
+NJ,city,,,yes,"Council, Commission, and Board of Commissioners forms are all used"
+NM,city,,,yes,"Mix of City Council, City Commission, and Governing Body"
+NY,city,,Mayor,yes,Mix of City Council and Common Council
+NY,town,Town Board,Supervisor,no,High confidence: NY Town Law. The Supervisor chairs the Town Board
+NY,village,Board of Trustees,Mayor,no,High confidence for most villages; a few say Village Board
+OH,village,Village Council,Mayor,no,Medium to high confidence: ORC Chapter 731
+OK,city,,,yes,"Mix of City Council, City Commission, and Board of Trustees"
+PA,borough,Borough Council,Mayor,no,High confidence: PA Borough Code. The Mayor has a limited role
+SC,town,Town Council,Mayor,no,Medium to high confidence
+SD,city,,,yes,"Mix of City Council, City Commission, and Common Council"
+TN,city,,,yes,"Mix of City Council, City Commission, and Board of Mayor and Aldermen"
+UT,town,Town Council,Mayor,no,Medium to high confidence
+VA,town,Town Council,Mayor,no,Medium to high confidence
+VT,city,,,yes,Mix of City Council and Board of Aldermen
+WA,town,Town Council,Mayor,no,Medium to high confidence
+WI,city,,,yes,Mix of Common Council and City Council
+WI,town,Town Board,Town Chair,no,High confidence for the body; the chair is also called Chairperson or Chairman. Few WI towns appear as Census places
+WV,city,,,yes,"Mix of City Council, City Commission, and Board of Commissioners"
+WY,town,Town Council,Mayor,no,Medium to high confidence

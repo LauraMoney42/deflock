@@ -14,7 +14,7 @@ import { decideCountyGovernment } from '../services/CountyGovernment';
 
 export const COUNTY_COLUMNS = [
   'fips', 'state', 'county', 'county_government', 'body_name', 'head_title', 'head_name',
-  'email', 'phone', 'website', 'contact_page', 'source', 'checked_on', 'status', 'note',
+  'email', 'phone', 'website', 'contact_page', 'source', 'checked_on', 'last_attempt', 'status', 'note',
 ] as const;
 
 export function toCsv(rows: Record<string, string>[], columns: readonly string[]): string {

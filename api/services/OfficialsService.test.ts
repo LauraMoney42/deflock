@@ -7,6 +7,7 @@ import {
   matchLegislators,
   applyOverrides,
   normalizeDistrict,
+  dataVersion,
   type CensusLookup,
 } from './OfficialsService';
 
@@ -28,7 +29,7 @@ describe('parseCensusResponse', () => {
     expect(parseCensusResponse(censusFixture)).toEqual({
       state: { code: 'CO', name: 'Colorado', fips: '08' },
       county: { name: 'Adams County', fips: '08001' },
-      place: { name: 'Westminster', fips: '0883835' },
+      place: { name: 'Westminster', fips: '0883835', type: 'city' },
       upperDistrict: '21',
       lowerDistrict: '35',
     });
@@ -37,6 +38,23 @@ describe('parseCensusResponse', () => {
   it('returns a null place for unincorporated areas', () => {
     const { 'Incorporated Places': _, ...rest } = censusFixture.result.geographies;
     expect(parseCensusResponse({ result: { geographies: rest } })?.place).toBeNull();
+  });
+
+  it('keeps the cleaned name and reads the place type from the Census NAME', () => {
+    const village = {
+      result: { geographies: {
+        ...censusFixture.result.geographies,
+        'Incorporated Places': [{ GEOID: '3659278', NAME: 'Pleasantville village', BASENAME: 'Pleasantville' }],
+      } },
+    };
+    expect(parseCensusResponse(village)?.place).toEqual({ name: 'Pleasantville', fips: '3659278', type: 'village' });
+    const balance = {
+      result: { geographies: {
+        ...censusFixture.result.geographies,
+        'Incorporated Places': [{ GEOID: '1836003', NAME: 'Indianapolis city (balance)', BASENAME: 'Indianapolis city (balance)' }],
+      } },
+    };
+    expect(parseCensusResponse(balance)?.place).toEqual({ name: 'Indianapolis', fips: '1836003', type: 'city' });
   });
 
   it('returns null outside the US (no state layer)', () => {
@@ -134,5 +152,12 @@ describe('cleanPlaceName', () => {
 
   it('leaves real names that end in City alone', () => {
     expect(cleanPlaceName('Boise City')).toBe('Boise City');
+  });
+});
+
+describe('dataVersion', () => {
+  it('is a stable short hash of the data files, computed once', () => {
+    expect(dataVersion()).toMatch(/^[0-9a-f]{8}$/);
+    expect(dataVersion()).toBe(dataVersion());
   });
 });

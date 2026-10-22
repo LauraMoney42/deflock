@@ -232,7 +232,10 @@ const start = async () => {
       // Census only covers the US; cameras elsewhere have no result
       return reply.status(404).send({ error: 'No US officials found for this location' });
     }
-    reply.header('Cache-Control', 'public, max-age=86400, s-maxage=86400');
+    // Short browser cache so a fixed contact or vacancy shows up within
+    // minutes, not a day; the CDN may hold it a little longer. The API's own
+    // disk cache absorbs repeat lookups, so this costs little.
+    reply.header('Cache-Control', 'public, max-age=300, s-maxage=3600');
     return result;
   });
 

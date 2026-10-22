@@ -1,10 +1,12 @@
 import { createCache, Cache } from 'cache-manager';
 import { Type, Static } from '@sinclair/typebox';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { otelLogger, SeverityNumber } from '../telemetry';
 import { parseCsv } from './csv';
 import { decideCountyGovernment, countyContact } from './CountyGovernment';
+import { decideCityGovernment, cityContact, placeTypeFromName } from './CityGovernment';
 
 export { parseCsv };
 const { DiskStore } = require('cache-manager-fs-hash');
@@ -42,6 +44,26 @@ const UnfilledSeatSchema = Type.Object({
   district: Type.String(),
 });
 
+// 'verified' = a person checked it; 'found' = pulled from the government's site, not yet checked
+const ContactStatusSchema = Type.Union([Type.Literal('verified'), Type.Literal('found'), Type.Null()]);
+
+const PlaceSchema = Type.Object({
+  name: Type.String(),
+  fips: Type.String(),
+  website: Type.Union([Type.String(), Type.Null()]),
+  head: Type.Union([Type.String(), Type.Null()]),
+  // Census place type from the NAME suffix: "city", "town", "village", "borough", ...
+  type: Type.Union([Type.String(), Type.Null()]),
+  // From data/city-government-by-state.csv; null where places of this type in the state differ
+  body: Type.Union([Type.String(), Type.Null()]),
+  headTitle: Type.Union([Type.String(), Type.Null()]),
+  // From data/city-contacts.csv when someone (or the extraction script) has filled it in
+  email: Type.Union([Type.String(), Type.Null()]),
+  phone: Type.Union([Type.String(), Type.Null()]),
+  contactPage: Type.Union([Type.String(), Type.Null()]),
+  contactStatus: ContactStatusSchema,
+});
+
 const CountySchema = Type.Object({
   name: Type.String(),
   fips: Type.String(),
@@ -54,13 +76,12 @@ const CountySchema = Type.Object({
   email: Type.Union([Type.String(), Type.Null()]),
   phone: Type.Union([Type.String(), Type.Null()]),
   contactPage: Type.Union([Type.String(), Type.Null()]),
-  // 'verified' = a person checked it; 'found' = pulled from the county's site, not yet checked
-  contactStatus: Type.Union([Type.Literal('verified'), Type.Literal('found'), Type.Null()]),
+  contactStatus: ContactStatusSchema,
 });
 
 export const OfficialsResultSchema = Type.Object({
   state: Type.Object({ code: Type.String(), name: Type.String(), fips: Type.String() }),
-  place: Type.Union([LocalGovSchema, Type.Null()]),
+  place: Type.Union([PlaceSchema, Type.Null()]),
   county: Type.Union([CountySchema, Type.Null()]),
   // Why there's no county card (no county government, independent city, ...)
   countyNote: Type.Union([Type.String(), Type.Null()]),
@@ -71,6 +92,7 @@ export const OfficialsResultSchema = Type.Object({
 });
 
 export type LocalGov = Static<typeof LocalGovSchema>;
+export type Place = Static<typeof PlaceSchema>;
 export type Legislator = Static<typeof LegislatorSchema>;
 export type UnfilledSeat = Static<typeof UnfilledSeatSchema>;
 export type OfficialsResult = Static<typeof OfficialsResultSchema>;
@@ -87,7 +109,7 @@ interface CensusGeo {
 export interface CensusLookup {
   state: { code: string; name: string; fips: string };
   county: { name: string; fips: string } | null;
-  place: { name: string; fips: string } | null;
+  place: { name: string; fips: string; type: string | null } | null;
   upperDistrict: string | null;
   lowerDistrict: string | null;
 }
@@ -141,7 +163,7 @@ export function parseCensusResponse(json: any): CensusLookup | null {
   return {
     state: { code: state.STUSAB, name: state.NAME, fips: state.GEOID },
     county: county ? { name: county.NAME, fips: county.GEOID } : null,
-    place: place ? { name: cleanPlaceName(place.BASENAME), fips: place.GEOID } : null,
+    place: place ? { name: cleanPlaceName(place.BASENAME), fips: place.GEOID, type: placeTypeFromName(place.NAME) } : null,
     upperDistrict: upper?.BASENAME ?? null,
     lowerDistrict: lower?.BASENAME ?? null,
   };
@@ -236,10 +258,38 @@ function loadOverrides(): Record<string, string>[] {
   return overridesCache;
 }
 
+// The spreadsheets change the response, but the disk cache outlives restarts
+// for 24h, so the cache key carries a hash of their contents: edit a CSV,
+// restart, and fresh results show immediately. Computed once at startup.
+// Open States data is upstream and not covered, 24h is fine for it.
+const DATA_FILES = [
+  'state-legislator-overrides.csv',
+  'county-government-by-state.csv',
+  'county-contacts.csv',
+  'city-government-by-state.csv',
+  'city-contacts.csv',
+];
+let dataVersionCache: string | null = null;
+export function dataVersion(): string {
+  if (!dataVersionCache) {
+    const hash = createHash('sha1');
+    for (const file of DATA_FILES) {
+      try {
+        hash.update(file).update(readFileSync(join(import.meta.dir, '../data', file)));
+      } catch {
+        hash.update(`${file}:missing`);
+      }
+    }
+    dataVersionCache = hash.digest('hex').slice(0, 8);
+  }
+  return dataVersionCache;
+}
+
 export class OfficialsService {
   async lookup(lat: number, lon: number): Promise<OfficialsResult | null> {
-    // ~110m grid: every request for the same camera hits the same key
-    const cacheKey = `officials:v8:${lat.toFixed(3)},${lon.toFixed(3)}`;
+    // ~110m grid: every request for the same camera hits the same key.
+    // Bump vN when the response shape changes; dataVersion() covers CSV edits.
+    const cacheKey = `officials:v9:${dataVersion()}:${lat.toFixed(3)},${lon.toFixed(3)}`;
     const cached = await cache.get<OfficialsResult>(cacheKey);
     if (cached) return cached;
 
@@ -261,11 +311,7 @@ export class OfficialsService {
 
     const result: OfficialsResult = {
       state: census.state,
-      place: census.place ? {
-        ...census.place,
-        website: websites.place?.website ?? null,
-        head: websites.place?.head ?? null,
-      } : null,
+      place: census.place ? this.buildPlace(census.state.code, census.place, websites.place) : null,
       county: census.county && countyDecision?.kind === 'government'
         ? this.buildCounty(census.county, websites.county, countyDecision.government)
         : null,
@@ -276,6 +322,29 @@ export class OfficialsService {
 
     await cache.set(cacheKey, result);
     return result;
+  }
+
+  // Same precedence as buildCounty: spreadsheet, then Wikidata, then the
+  // state/type defaults. The mayor from Wikidata is kept as is.
+  private buildPlace(
+    stateCode: string,
+    place: { name: string; fips: string; type: string | null },
+    wiki: { website: string | null; head: string | null } | undefined,
+  ): Place {
+    const sheet = cityContact(place.fips);
+    const government = decideCityGovernment(stateCode, place.type);
+    const status = sheet?.status === 'verified' || sheet?.status === 'found' ? sheet.status : null;
+    return {
+      ...place,
+      website: sheet?.website || wiki?.website || null,
+      head: sheet?.head_name || wiki?.head || null,
+      body: sheet?.body_name || government.body,
+      headTitle: sheet?.head_title || government.headTitle,
+      email: (status && sheet?.email) || null,
+      phone: (status && sheet?.phone) || null,
+      contactPage: sheet?.contact_page || null,
+      contactStatus: status && (sheet?.email || sheet?.phone) ? status : null,
+    };
   }
 
   // Spreadsheet values win over Wikidata and the state defaults: they're
