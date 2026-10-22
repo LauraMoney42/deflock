@@ -13,6 +13,8 @@ declare module 'fastify' {
 function classifyError(error: FastifyError): string {
   if (error.code === 'FST_ERR_VALIDATION') return 'validation_error';
   const msg = error.message.toLowerCase();
+  // Checked before 'geocode' because the Census error message is "Census geocoder error"
+  if (msg.includes('census')) return 'upstream_error:census';
   if (msg.includes('geocode') || msg.includes('nominatim')) return 'upstream_error:nominatim';
   if (msg.includes('sponsors') || msg.includes('github')) return 'upstream_error:github';
   if (msg.includes('zammad') || msg.includes('ticket')) return 'upstream_error:zammad';
@@ -33,6 +35,7 @@ import { classifyGeoQuery } from './services/GeoQueryClassifier';
 import { GithubClient, SponsorsResponseSchema } from './services/GithubClient';
 import { TurnstileClient } from './services/TurnstileClient';
 import { ZammadClient, ContactMessageBodySchema, ContactMessageBody } from './services/ZammadClient';
+import { OfficialsService, OfficialsResultSchema } from './services/OfficialsService';
 
 const start = async () => {
   const server: FastifyInstance = Fastify({
@@ -137,6 +140,7 @@ const start = async () => {
   const githubClient = new GithubClient();
   const turnstileClient = new TurnstileClient();
   const zammadClient = new ZammadClient();
+  const officialsService = new OfficialsService();
 
   const shutdown = async () => {
     server.log.info("Shutting down");
@@ -200,6 +204,35 @@ const start = async () => {
     };
     reply.header('Cache-Control', 'public, max-age=86400, s-maxage=86400');
     const result = await nominatim.geocodePhrase(query, false);
+    return result;
+  });
+
+  // Who answers for a camera: city, county, and state legislators at its location.
+  // Takes the camera's coordinates only; the user's own address is never sent.
+  server.get('/officials', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          lat: { type: 'number', minimum: -90, maximum: 90 },
+          lon: { type: 'number', minimum: -180, maximum: 180 },
+        },
+        required: ['lat', 'lon'],
+      },
+      response: {
+        200: OfficialsResultSchema,
+        404: { type: 'object', properties: { error: { type: 'string' } } },
+        500: { type: 'object', properties: { error: { type: 'string' } } },
+      },
+    },
+  }, async (request, reply) => {
+    const { lat, lon } = request.query as { lat: number, lon: number };
+    const result = await officialsService.lookup(lat, lon);
+    if (!result) {
+      // Census only covers the US; cameras elsewhere have no result
+      return reply.status(404).send({ error: 'No US officials found for this location' });
+    }
+    reply.header('Cache-Control', 'public, max-age=86400, s-maxage=86400');
     return result;
   });
 

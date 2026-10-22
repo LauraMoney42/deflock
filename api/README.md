@@ -4,6 +4,7 @@ A Fastify-based API service for DeFlock handling non-OSM related backend logic.
 
 ## Endpoints
 - `/geocode?query=...` — Geocode a location
+- `/officials?lat=...&lon=...`: City, county, and state legislators for a point (Census Geocoder + Open States + Wikidata); used by Contact Reps on maps.deflock.org
 - `/sponsors/github` — Get GitHub sponsors
 - `/healthcheck` — Health check
 
