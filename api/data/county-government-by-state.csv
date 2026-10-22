@@ -1,0 +1,52 @@
+state,has_county_government,body_name,head_title,varies,note
+AL,yes,County Commission,Chairman,no,
+AK,yes,Borough Assembly,Mayor,no,Boroughs instead of counties; the Unorganized Borough has no borough government
+AZ,yes,Board of Supervisors,Chair,no,
+AR,yes,Quorum Court,County Judge,no,County Judge is the elected county executive and presides over the Quorum Court
+CA,yes,Board of Supervisors,Chair,no,
+CO,yes,Board of County Commissioners,Chair,no,Denver and Broomfield are consolidated city-counties
+CT,no,,,no,County government abolished in 1960; Census uses planning regions
+DE,yes,County Council,Council President,yes,Kent County uses a Levy Court; New Castle and Sussex have County Councils. Source: https://www.kentcountyde.gov/My-Government/Elected-Officials
+FL,yes,Board of County Commissioners,Chair,no,
+GA,yes,Board of Commissioners,Chair,yes,Some counties use a sole commissioner or a consolidated city-county government
+HI,yes,County Council,Mayor,yes,Honolulu is a consolidated City and County governed by the Honolulu City Council; Kalawao County has no government
+ID,yes,Board of County Commissioners,Chair,no,
+IL,yes,County Board,Chair,yes,Cook County has a Board of Commissioners led by a President; some counties use a commission form
+IN,yes,Board of Commissioners,President,no,Indiana counties also have a separate County Council for budgets
+IA,yes,Board of Supervisors,Chair,no,
+KS,yes,Board of County Commissioners,Chair,no,
+KY,yes,Fiscal Court,County Judge/Executive,no,
+LA,yes,Parish Council,President,yes,Parishes; some use a Police Jury instead of a Parish Council
+ME,yes,Board of County Commissioners,Chair,no,
+MD,yes,County Council,,yes,Charter counties have a County Council (some with a County Executive); others use a Board of County Commissioners led by a President; Baltimore City is independent of any county
+MA,yes,Board of County Commissioners,Chair,yes,Most Massachusetts county governments were abolished; only a few remain
+MI,yes,Board of Commissioners,Chair,no,
+MN,yes,Board of Commissioners,Chair,no,
+MS,yes,Board of Supervisors,President,no,
+MO,yes,County Commission,Presiding Commissioner,yes,Charter counties (such as St. Louis County) have a County Council and County Executive
+MT,yes,Board of County Commissioners,Chair,no,
+NE,yes,Board of Commissioners,Chair,yes,Some counties use a Board of Supervisors
+NV,yes,Board of County Commissioners,Chair,no,Carson City is a consolidated municipality
+NH,yes,Board of County Commissioners,Chair,no,
+NJ,yes,Board of County Commissioners,Director,no,"Official title is Commissioner Director; Atlantic, Bergen, Essex, Hudson, and Mercer also have a County Executive"
+NM,yes,Board of County Commissioners,Chair,no,
+NY,yes,County Legislature,Chair,yes,Some counties use a Board of Supervisors; New York City's five boroughs have no county government
+NC,yes,Board of Commissioners,Chair,no,
+ND,yes,Board of County Commissioners,Chair,no,
+OH,yes,Board of County Commissioners,President,no,
+OK,yes,Board of County Commissioners,Chair,no,
+OR,yes,Board of County Commissioners,Chair,yes,About 8 counties use a County Court led by a County Judge. Source: https://sos.oregon.gov/blue-book/government/pages/county-courts.aspx
+PA,yes,Board of Commissioners,Chair,yes,Home rule counties may have a County Council and County Executive; Philadelphia is a consolidated city-county
+RI,no,,,no,No county government since 1842
+SC,yes,County Council,Chair,no,
+SD,yes,Board of County Commissioners,Chair,no,
+TN,yes,County Commission,County Mayor,no,
+TX,yes,Commissioners Court,County Judge,no,County Judge presides over the Commissioners Court
+UT,yes,County Commission,Chair,yes,Some counties use a County Council
+VT,no,,,no,Vermont counties have no general-purpose county government
+VA,yes,Board of Supervisors,Chair,no,Independent cities are separate from counties
+WA,yes,Board of County Commissioners,Chair,yes,Charter counties (such as King County) have a County Council
+WV,yes,County Commission,President,no,
+WI,yes,County Board of Supervisors,Chair,no,
+WY,yes,Board of County Commissioners,Chair,no,
+DC,no,,,no,No county government; the D.C. Council and Mayor govern the District

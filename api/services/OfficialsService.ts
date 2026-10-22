@@ -3,6 +3,10 @@ import { Type, Static } from '@sinclair/typebox';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { otelLogger, SeverityNumber } from '../telemetry';
+import { parseCsv } from './csv';
+import { decideCountyGovernment, countyContact } from './CountyGovernment';
+
+export { parseCsv };
 const { DiskStore } = require('cache-manager-fs-hash');
 
 // Looks up who answers for a point on the map: the city (if incorporated),
@@ -38,10 +42,28 @@ const UnfilledSeatSchema = Type.Object({
   district: Type.String(),
 });
 
+const CountySchema = Type.Object({
+  name: Type.String(),
+  fips: Type.String(),
+  website: Type.Union([Type.String(), Type.Null()]),
+  head: Type.Union([Type.String(), Type.Null()]),
+  // From data/county-government-by-state.csv; null where counties in the state differ
+  body: Type.Union([Type.String(), Type.Null()]),
+  headTitle: Type.Union([Type.String(), Type.Null()]),
+  // From data/county-contacts.csv when someone (or the extraction script) has filled it in
+  email: Type.Union([Type.String(), Type.Null()]),
+  phone: Type.Union([Type.String(), Type.Null()]),
+  contactPage: Type.Union([Type.String(), Type.Null()]),
+  // 'verified' = a person checked it; 'found' = pulled from the county's site, not yet checked
+  contactStatus: Type.Union([Type.Literal('verified'), Type.Literal('found'), Type.Null()]),
+});
+
 export const OfficialsResultSchema = Type.Object({
   state: Type.Object({ code: Type.String(), name: Type.String(), fips: Type.String() }),
   place: Type.Union([LocalGovSchema, Type.Null()]),
-  county: Type.Union([LocalGovSchema, Type.Null()]),
+  county: Type.Union([CountySchema, Type.Null()]),
+  // Why there's no county card (no county government, independent city, ...)
+  countyNote: Type.Union([Type.String(), Type.Null()]),
   stateLegislators: Type.Array(LegislatorSchema),
   // Districts that contain the camera but have no current member in our data,
   // usually a vacancy. Shown to the user instead of silently leaving a gap.
@@ -100,7 +122,7 @@ export function cleanPlaceName(name: string): string {
   if (!/\(balance\)/.test(name)) return name;
   return name
     .replace(/\s*\(balance\)\s*$/, '')
-    .replace(/\s+(city|town|metropolitan government|unified government|consolidated government)$/i, '')
+    .replace(/\s+(city|town|metro government|metropolitan government|unified government|consolidated government|urban county)$/i, '')
     .trim();
 }
 
@@ -123,41 +145,6 @@ export function parseCensusResponse(json: any): CensusLookup | null {
     upperDistrict: upper?.BASENAME ?? null,
     lowerDistrict: lower?.BASENAME ?? null,
   };
-}
-
-// Minimal RFC 4180 parser: Open States CSVs quote fields that contain commas,
-// quotes, or newlines (biographies do), so a plain split(',') is not enough.
-export function parseCsv(text: string): Record<string, string>[] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inQuotes) {
-      if (ch === '"' && text[i + 1] === '"') { field += '"'; i++; }
-      else if (ch === '"') inQuotes = false;
-      else field += ch;
-    } else if (ch === '"') {
-      inQuotes = true;
-    } else if (ch === ',') {
-      row.push(field); field = '';
-    } else if (ch === '\n' || ch === '\r') {
-      if (ch === '\r' && text[i + 1] === '\n') i++;
-      row.push(field); field = '';
-      rows.push(row); row = [];
-    } else {
-      field += ch;
-    }
-  }
-  if (field || row.length) { row.push(field); rows.push(row); }
-
-  const [header, ...data] = rows;
-  if (!header) return [];
-  return data
-    .filter(r => r.length > 1)
-    .map(r => Object.fromEntries(header.map((h, i) => [h, r[i] ?? ''])));
 }
 
 export function toLegislator(row: Record<string, string>): Legislator {
@@ -252,7 +239,7 @@ function loadOverrides(): Record<string, string>[] {
 export class OfficialsService {
   async lookup(lat: number, lon: number): Promise<OfficialsResult | null> {
     // ~110m grid: every request for the same camera hits the same key
-    const cacheKey = `officials:v6:${lat.toFixed(3)},${lon.toFixed(3)}`;
+    const cacheKey = `officials:v8:${lat.toFixed(3)},${lon.toFixed(3)}`;
     const cached = await cache.get<OfficialsResult>(cacheKey);
     if (cached) return cached;
 
@@ -267,6 +254,9 @@ export class OfficialsService {
     ]);
 
     const legislators = applyOverrides(openStates, census.state.code, loadOverrides());
+    const countyDecision = census.county
+      ? decideCountyGovernment(census.state.code, census.county, census.place?.name ?? null)
+      : null;
     const { legislators: matched, unfilledSeats } = matchLegislators(legislators, census);
 
     const result: OfficialsResult = {
@@ -276,17 +266,38 @@ export class OfficialsService {
         website: websites.place?.website ?? null,
         head: websites.place?.head ?? null,
       } : null,
-      county: census.county ? {
-        ...census.county,
-        website: websites.county?.website ?? null,
-        head: websites.county?.head ?? null,
-      } : null,
+      county: census.county && countyDecision?.kind === 'government'
+        ? this.buildCounty(census.county, websites.county, countyDecision.government)
+        : null,
+      countyNote: countyDecision?.kind === 'none' ? countyDecision.reason : null,
       stateLegislators: matched,
       unfilledSeats,
     };
 
     await cache.set(cacheKey, result);
     return result;
+  }
+
+  // Spreadsheet values win over Wikidata and the state defaults: they're
+  // specific to this county and, when verified, checked by a person.
+  private buildCounty(
+    county: { name: string; fips: string },
+    wiki: { website: string | null; head: string | null } | undefined,
+    government: { body: string | null; headTitle: string | null },
+  ) {
+    const sheet = countyContact(county.fips);
+    const status = sheet?.status === 'verified' || sheet?.status === 'found' ? sheet.status : null;
+    return {
+      ...county,
+      website: sheet?.website || wiki?.website || null,
+      head: sheet?.head_name || wiki?.head || null,
+      body: sheet?.body_name || government.body,
+      headTitle: sheet?.head_title || government.headTitle,
+      email: (status && sheet?.email) || null,
+      phone: (status && sheet?.phone) || null,
+      contactPage: sheet?.contact_page || null,
+      contactStatus: status && (sheet?.email || sheet?.phone) ? status : null,
+    };
   }
 
   async censusLookup(lat: number, lon: number): Promise<CensusLookup | null> {
